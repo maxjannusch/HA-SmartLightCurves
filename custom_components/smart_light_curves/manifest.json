@@ -1,0 +1,9 @@
+{
+  "domain": "smart_light_curves",
+  "name": "Smart Light Curves",
+  "version": "1.0.0",
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/YOUR_GITHUB_USERNAME/HA-SmartLightCurves",
+  "iot_class": "local_polling"
+}
