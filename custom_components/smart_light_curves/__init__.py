@@ -2,6 +2,7 @@ import os
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from .controller import SmartLightController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Initialize and start the PID controller
+    controller = SmartLightController(hass, entry)
+    hass.data[DOMAIN][entry.entry_id]["pid_controller"] = controller
+    await controller.start()
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
