@@ -2,12 +2,13 @@ import os
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from .controller import SmartLightController
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_light_curves"
 PLATFORMS = ["sensor", "switch"]
+
+from .controller import SmartLightController
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Light Curves from a UI config entry."""
