@@ -84,7 +84,8 @@ class LearningModeSwitch(SwitchEntity):
                 )
                 
                 # Wait for light to physically fade AND the lux sensor to broadcast
-                await asyncio.sleep(6) 
+                # DELAY BETWEEN STEPS
+                await asyncio.sleep(12) 
                 
                 lux_state = self.hass.states.get(self._lux_id)
                 current_lux = float(lux_state.state) if lux_state and lux_state.state not in ['unavailable', 'unknown'] else ambient_lux
