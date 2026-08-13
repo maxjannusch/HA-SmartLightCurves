@@ -1,5 +1,7 @@
 import os
 import logging
+import voluptuous as vol
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -37,10 +39,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
     # Initialize and start the PID controller
     controller = SmartLightController(hass, entry)
     hass.data[DOMAIN][entry.entry_id]["pid_controller"] = controller
     await controller.start()
+
+    # ---------------------------------------------------------
+    # NEW CODE BLOCK: Register the Javascript Canvas Service
+    # ---------------------------------------------------------
+    # Check if it already exists so we don't crash if you add a 2nd room
+    if not hass.services.has_service(DOMAIN, "save_target_curve"):
+        
+        async def handle_save_curve(call):
+            entity_id = call.data.get("entity_id")
+            points = call.data.get("points")
+            
+            # Fetch the current state to preserve its base information
+            current_state = hass.states.get(entity_id)
+            if current_state:
+                # Update the attributes with the new 24-hour drawing
+                new_attrs = dict(current_state.attributes)
+                new_attrs["points"] = points
+                
+                # Instantly overwrite the state in Home Assistant
+                hass.states.async_set(entity_id, current_state.state, new_attrs)
+
+        hass.services.async_register(
+            DOMAIN, 
+            "save_target_curve", 
+            handle_save_curve,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Required("points"): list
+            })
+        )
+    # ---------------------------------------------------------
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
