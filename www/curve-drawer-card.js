@@ -1,58 +1,71 @@
+cd ~/homeassistant/config/dev_repos/HA-SmartLightCurves/www
+
+cat << 'EOF' > curve-drawer-card-v12.js
 class SmartLightCurvesCard extends HTMLElement {
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error('You need to define an entity (e.g. sensor.smart_room_lighting_target_lux_array)');
-    }
+    if (!config.entity) throw new Error('You need to define an entity');
     this.config = config;
   }
 
   set hass(hass) {
     this._hass = hass;
-    
-    // CRITICAL FIX: Do not attempt to render until Home Assistant provides the config
     if (!this.config) return;
 
-    // Only build the HTML once
-    if (!this.content) {
-      const entityId = this.config.entity;
+    if (!this.contentBuilt) {
+      this.contentBuilt = true;
 
-      this.innerHTML = `
-        
-          
-            
-            
-              Save Curve
-              Max Lux: 
-              Saved!
-            
-          
-        
-      `;
+      this.style.cssText = "display: block; width: 100%;";
 
-      this.content = this.querySelector('div');
-      this.canvas = this.querySelector('#curveCanvas');
+      const card = document.createElement('ha-card');
+      card.header = "Target Brightness (Lux)";
+      card.style.cssText = "padding: 16px; display: block;";
+      this.appendChild(card);
+
+      const container = document.createElement('div');
+      container.style.cssText = "width: 100%; height: 250px; background: rgba(128,128,128,0.05); border-radius: 6px; border: 1px solid rgba(128,128,128,0.2); position: relative; display: block;";
+      card.appendChild(container);
+
+      this.canvas = document.createElement('canvas');
+      this.canvas.style.cssText = "width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair;";
+      container.appendChild(this.canvas);
+      
       this.ctx = this.canvas.getContext('2d');
-      this.maxLuxInput = this.querySelector('#maxLuxInput');
+      if (!this.ctx) {
+        console.error("Failed to get 2D context");
+        return;
+      }
 
-      // Internal state
+      const controls = document.createElement('div');
+      controls.style.cssText = "display: flex; justify-content: space-between; margin-top: 16px; align-items: center; width: 100%;";
+      card.appendChild(controls);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.innerText = "Save Curve";
+      saveBtn.style.cssText = "background: #03a9f4; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;";
+      controls.appendChild(saveBtn);
+
+      const luxWrapper = document.createElement('div');
+      luxWrapper.style.cssText = "color: gray; font-size: 14px;";
+      luxWrapper.innerText = "Max Lux: ";
+      controls.appendChild(luxWrapper);
+
+      this.maxLuxInput = document.createElement('input');
+      this.maxLuxInput.type = "number";
+      this.maxLuxInput.value = this.config.max_lux || 500;
+      this.maxLuxInput.style.cssText = "width: 65px; text-align: center; border: 1px solid #ccc; border-radius: 4px; padding: 6px; background: transparent; color: var(--primary-text-color, black);";
+      luxWrapper.appendChild(this.maxLuxInput);
+
+      this.statusSpan = document.createElement('span');
+      this.statusSpan.innerText = "Saved!";
+      this.statusSpan.style.cssText = "color: #4caf50; font-weight: bold; visibility: hidden;";
+      controls.appendChild(this.statusSpan);
+
       this.points = new Array(24).fill(0);
       this.isDrawing = false;
       this.lastHour = -1;
       this.lastVal = -1;
       this.maxLux = parseInt(this.maxLuxInput.value) || 500;
 
-      // Align canvas internal resolution with CSS rendering width
-      setTimeout(() => {
-        this.canvas.width = this.canvas.offsetWidth;
-
-        // Try to load existing curve from Home Assistant
-        if (entityId && hass.states[entityId] && hass.states[entityId].attributes.points) {
-          this.points = [...hass.states[entityId].attributes.points];
-        }
-        this.draw();
-      }, 100);
-
-      // Update max lux dynamically
       this.maxLuxInput.addEventListener('change', (e) => {
         this.maxLux = parseInt(e.target.value) || 500;
         this.draw();
@@ -64,16 +77,16 @@ class SmartLightCurvesCard extends HTMLElement {
         const rect = this.canvas.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
+        
         const x = clientX - rect.left;
         const y = clientY - rect.top;
-
+        
         const hour = Math.max(0, Math.min(23, Math.floor((x / rect.width) * 24)));
         const rawVal = this.maxLux - (y / rect.height) * this.maxLux;
         const val = Math.max(0, Math.min(this.maxLux, Math.round(rawVal / 10) * 10));
-
+        
         this.points[hour] = val;
-
+        
         if (this.lastHour !== -1 && Math.abs(hour - this.lastHour) > 1) {
           const step = hour > this.lastHour ? 1 : -1;
           for (let i = this.lastHour + step; i !== hour; i += step) {
@@ -81,7 +94,6 @@ class SmartLightCurvesCard extends HTMLElement {
             this.points[i] = Math.round((this.lastVal + (val - this.lastVal) * fraction) / 10) * 10;
           }
         }
-
         this.lastHour = hour;
         this.lastVal = val;
         this.draw();
@@ -94,48 +106,70 @@ class SmartLightCurvesCard extends HTMLElement {
       this.canvas.addEventListener('mousemove', interact);
       this.canvas.addEventListener('mouseup', stopDraw);
       this.canvas.addEventListener('mouseleave', stopDraw);
-
       this.canvas.addEventListener('touchstart', startDraw, {passive: false});
       this.canvas.addEventListener('touchmove', interact, {passive: false});
       this.canvas.addEventListener('touchend', stopDraw);
 
-      this.querySelector('#saveBtn').addEventListener('click', () => {
-         if(!entityId) {
-            alert("Please configure an entity in the card settings!");
-            return;
-         }
-        this._hass.callService('smart_light_curves', 'save_target_curve', { 
-            entity_id: entityId,
-            points: this.points 
-        });
-        const status = this.querySelector('#status');
-        status.style.opacity = '1';
-        setTimeout(() => status.style.opacity = '0', 2000);
+      saveBtn.addEventListener('click', () => {
+        if (this._hass) {
+          this._hass.callService('smart_light_curves', 'save_target_curve', { 
+              entity_id: this.config.entity,
+              points: this.points 
+          });
+          this.statusSpan.style.visibility = 'visible';
+          setTimeout(() => this.statusSpan.style.visibility = 'hidden', 2000);
+        }
       });
+
+      const resizeCanvas = () => {
+        if (container.clientWidth > 0 && container.clientHeight > 0) {
+          this.canvas.width = container.clientWidth;
+          this.canvas.height = container.clientHeight;
+          this.draw();
+        }
+      };
+      
+      new ResizeObserver(resizeCanvas).observe(container);
+      setTimeout(resizeCanvas, 50);
+    }
+
+    if (hass.states[this.config.entity]) {
+       const stateObj = hass.states[this.config.entity];
+       if (stateObj.attributes && stateObj.attributes.points && Array.isArray(stateObj.attributes.points)) {
+          if (!this.isDrawing) {
+             const newPoints = stateObj.attributes.points;
+             if (JSON.stringify(this.points) !== JSON.stringify(newPoints)) {
+                this.points = [...newPoints];
+                this.draw();
+             }
+          }
+       }
     }
   }
 
   draw() {
+    if (!this.ctx || !this.canvas || this.canvas.width === 0) return;
+    
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     this.ctx.beginPath();
-    this.ctx.strokeStyle = 'rgba(128,128,128,0.2)';
-    this.ctx.fillStyle = 'rgba(128,128,128,0.5)';
-    this.ctx.font = '10px sans-serif';
+    this.ctx.strokeStyle = 'rgba(128,128,128,0.3)';
+    this.ctx.fillStyle = 'rgba(128,128,128,0.8)';
+    this.ctx.font = '11px sans-serif';
     this.ctx.lineWidth = 1;
 
     for(let i=0; i<24; i+=3) {
        let px = (i / 23) * this.canvas.width;
        this.ctx.moveTo(px, 0); 
        this.ctx.lineTo(px, this.canvas.height);
-       if (i > 0) this.ctx.fillText(i + 'h', px + 4, this.canvas.height - 4);
+       if (i > 0) this.ctx.fillText(i + 'h', px + 4, this.canvas.height - 6);
     }
 
     for(let i=1; i<=4; i++) {
         let py = this.canvas.height - (i/4) * this.canvas.height;
         this.ctx.moveTo(0, py);
         this.ctx.lineTo(this.canvas.width, py);
-        this.ctx.fillText(Math.round((i/4) * this.maxLux) + ' lx', 4, py - 4);
+        this.ctx.fillText(Math.round((i/4) * this.maxLux) + ' lx', 4, py - 6);
     }
     this.ctx.stroke();
 
@@ -146,7 +180,7 @@ class SmartLightCurvesCard extends HTMLElement {
        const py = this.canvas.height - (this.points[i] / this.maxLux) * this.canvas.height;
        this.ctx.lineTo(px, py);
     }
-    this.ctx.strokeStyle = 'var(--primary-color, #03a9f4)';
+    this.ctx.strokeStyle = '#03a9f4';
     this.ctx.lineWidth = 4;
     this.ctx.lineJoin = 'round';
     this.ctx.stroke();
@@ -154,16 +188,15 @@ class SmartLightCurvesCard extends HTMLElement {
     this.ctx.lineTo(this.canvas.width, this.canvas.height);
     this.ctx.lineTo(0, this.canvas.height);
     this.ctx.closePath();
-    this.ctx.fillStyle = 'rgba(3, 169, 244, 0.15)'; 
+    this.ctx.fillStyle = 'rgba(3, 169, 244, 0.2)'; 
     this.ctx.fill();
   }
 }
 
-customElements.define('smart-light-curves-card', SmartLightCurvesCard);
+if (!customElements.get('smart-light-curves-card')) {
+  customElements.define('smart-light-curves-card', SmartLightCurvesCard);
+}
+EOF
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "smart-light-curves-card",
-  name: "Smart Light Curves Canvas",
-  description: "Draw a 24h Lux profile for your lighting controller."
-});
+cp curve-drawer-card-v12.js ~/homeassistant/config/www/
+chmod 755 ~/homeassistant/config/www/curve-drawer-card-v12.js
