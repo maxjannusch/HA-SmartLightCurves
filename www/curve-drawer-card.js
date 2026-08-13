@@ -1,9 +1,6 @@
-cd ~/homeassistant/config/dev_repos/HA-SmartLightCurves/www
-
-cat << 'EOF' > curve-drawer-card-v12.js
 class SmartLightCurvesCard extends HTMLElement {
   setConfig(config) {
-    if (!config.entity) throw new Error('You need to define an entity');
+    if (!config.entity) throw new Error('You need to define an entity (e.g. sensor.smart_room_lighting_target_lux_array)');
     this.config = config;
   }
 
@@ -11,18 +8,22 @@ class SmartLightCurvesCard extends HTMLElement {
     this._hass = hass;
     if (!this.config) return;
 
+    // BUILD ONLY ONCE: Solves the null error loop
     if (!this.contentBuilt) {
       this.contentBuilt = true;
-
       this.style.cssText = "display: block; width: 100%;";
 
       const card = document.createElement('ha-card');
-      card.header = "Target Brightness (Lux)";
-      card.style.cssText = "padding: 16px; display: block;";
+      card.style.cssText = "padding: 16px; display: block; box-sizing: border-box;";
       this.appendChild(card);
+      
+      const title = document.createElement('h2');
+      title.innerText = "Target Brightness (Lux) - 24h Profile";
+      title.style.cssText = "margin: 0 0 16px 0; font-family: var(--paper-font-headline_-_font-family, sans-serif); font-size: 20px; font-weight: 400; color: var(--primary-text-color, black); display: block;";
+      card.appendChild(title);
 
       const container = document.createElement('div');
-      container.style.cssText = "width: 100%; height: 250px; background: rgba(128,128,128,0.05); border-radius: 6px; border: 1px solid rgba(128,128,128,0.2); position: relative; display: block;";
+      container.style.cssText = "width: 100%; height: 250px; background: rgba(128,128,128,0.05); border-radius: 6px; border: 1px solid rgba(128,128,128,0.2); position: relative; display: block; box-sizing: border-box;";
       card.appendChild(container);
 
       this.canvas = document.createElement('canvas');
@@ -31,7 +32,7 @@ class SmartLightCurvesCard extends HTMLElement {
       
       this.ctx = this.canvas.getContext('2d');
       if (!this.ctx) {
-        console.error("Failed to get 2D context");
+        console.error("SmartLightCurvesCard: Failed to get 2D context");
         return;
       }
 
@@ -41,23 +42,23 @@ class SmartLightCurvesCard extends HTMLElement {
 
       const saveBtn = document.createElement('button');
       saveBtn.innerText = "Save Curve";
-      saveBtn.style.cssText = "background: #03a9f4; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;";
+      saveBtn.style.cssText = "background: var(--primary-color, #03a9f4); color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;";
       controls.appendChild(saveBtn);
 
       const luxWrapper = document.createElement('div');
-      luxWrapper.style.cssText = "color: gray; font-size: 14px;";
+      luxWrapper.style.cssText = "color: var(--secondary-text-color, gray); font-size: 14px;";
       luxWrapper.innerText = "Max Lux: ";
       controls.appendChild(luxWrapper);
 
       this.maxLuxInput = document.createElement('input');
       this.maxLuxInput.type = "number";
       this.maxLuxInput.value = this.config.max_lux || 500;
-      this.maxLuxInput.style.cssText = "width: 65px; text-align: center; border: 1px solid #ccc; border-radius: 4px; padding: 6px; background: transparent; color: var(--primary-text-color, black);";
+      this.maxLuxInput.style.cssText = "width: 65px; text-align: center; border: 1px solid rgba(128,128,128,0.3); border-radius: 4px; padding: 6px; background: transparent; color: var(--primary-text-color, black);";
       luxWrapper.appendChild(this.maxLuxInput);
 
       this.statusSpan = document.createElement('span');
       this.statusSpan.innerText = "Saved!";
-      this.statusSpan.style.cssText = "color: #4caf50; font-weight: bold; visibility: hidden;";
+      this.statusSpan.style.cssText = "color: var(--success-color, #4caf50); font-weight: bold; visibility: hidden;";
       controls.appendChild(this.statusSpan);
 
       this.points = new Array(24).fill(0);
@@ -121,6 +122,7 @@ class SmartLightCurvesCard extends HTMLElement {
         }
       });
 
+      // Resize observer prevents size=0 bugs on some screens
       const resizeCanvas = () => {
         if (container.clientWidth > 0 && container.clientHeight > 0) {
           this.canvas.width = container.clientWidth;
@@ -180,7 +182,7 @@ class SmartLightCurvesCard extends HTMLElement {
        const py = this.canvas.height - (this.points[i] / this.maxLux) * this.canvas.height;
        this.ctx.lineTo(px, py);
     }
-    this.ctx.strokeStyle = '#03a9f4';
+    this.ctx.strokeStyle = 'var(--primary-color, #03a9f4)';
     this.ctx.lineWidth = 4;
     this.ctx.lineJoin = 'round';
     this.ctx.stroke();
@@ -196,7 +198,5 @@ class SmartLightCurvesCard extends HTMLElement {
 if (!customElements.get('smart-light-curves-card')) {
   customElements.define('smart-light-curves-card', SmartLightCurvesCard);
 }
-EOF
 
-cp curve-drawer-card-v12.js ~/homeassistant/config/www/
-chmod 755 ~/homeassistant/config/www/curve-drawer-card-v12.js
+console.log("Loaded SmartLightCurvesCard perfectly from Git Hook!");
