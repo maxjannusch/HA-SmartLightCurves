@@ -1,9 +1,11 @@
 import os
+import json
 import logging
 import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -16,14 +18,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Light Curves from a UI config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # ---------------------------------------------------------
-    # REGISTER THE SERVICE FIRST - Before anything can block or crash
-    # ---------------------------------------------------------
     if not hass.services.has_service(DOMAIN, "save_target_curve"):
         async def handle_save_curve(call):
             entity_id = call.data.get("entity_id")
             points = call.data.get("points")
             
+            # 1. Trace the entity_id backward to find which room/instance it belongs to
+            registry = er.async_get(hass)
+            entity_entry = registry.async_get(entity_id)
+            
+            if entity_entry and entity_entry.config_entry_id:
+                config_entry_id = entity_entry.config_entry_id
+                instance_data = hass.data[DOMAIN].get(config_entry_id)
+                
+                if instance_data:
+                    storage_path = instance_data["storage_path"]
+                    file_path = os.path.join(storage_path, "target_curve.json")
+                    
+                    # 2. Write the 24-hour curve permanently to the room's folder
+                    def save_to_disk():
+                        with open(file_path, "w") as f:
+                            json.dump(points, f)
+                    
+                    await hass.async_add_executor_job(save_to_disk)
+                    _LOGGER.info("Saved target curve for %s to %s", entity_id, file_path)
+                    
+                    # (Optional) If your controller is listening, update it in real-time here
+                    # controller = instance_data.get("pid_controller")
+                    # if controller:
+                    #     controller.update_curve(points)
+
+            # 3. Update the volatile UI state so the frontend updates instantly
             current_state = hass.states.get(entity_id)
             if current_state:
                 new_attrs = dict(current_state.attributes)
@@ -39,7 +64,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 vol.Required("points"): list
             })
         )
-    # ---------------------------------------------------------
 
     # 1. Grab the name the user typed in the UI (e.g., "Living Room")
     safe_name = entry.data.get("name", "Room").replace(" ", "_")
@@ -64,7 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # Initialize and start the PID controller LAST
+    # Initialize and start the PID controller
     controller = SmartLightController(hass, entry)
     hass.data[DOMAIN][entry.entry_id]["pid_controller"] = controller
     await controller.start()

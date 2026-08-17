@@ -1,78 +1,68 @@
+import os
+import json
 import logging
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.restore_state import RestoreEntity
-from . import DOMAIN
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+DOMAIN = "smart_light_curves"
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """Set up the curve sensor."""
-    # Get the unique ID for this instance based on the integration entry
-    entry_id = config_entry.entry_id
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
+    """Set up the Smart Light Curves sensor from a config entry."""
+    
+    # Grab the specific storage path assigned to this room by __init__.py
+    instance_data = hass.data[DOMAIN][entry.entry_id]
+    storage_path = instance_data["storage_path"]
+    room_name = entry.data.get("name", "Room")
 
-    sensor = TargetCurveSensor(hass, entry_id, config_entry.data.get("name", "Target Curve"))
-    async_add_entities([sensor])
+    # Create and register the sensor
+    async_add_entities([SmartLightTargetCurveSensor(room_name, entry.entry_id, storage_path)])
 
-class TargetCurveSensor(SensorEntity, RestoreEntity):
-    """Sensor that stores the 24-hour target curve array."""
+class SmartLightTargetCurveSensor(SensorEntity):
+    """Representation of the 24-hour Lux target curve."""
 
-    def __init__(self, hass, entry_id, name):
-        self.hass = hass
-        self._entry_id = entry_id
+    def __init__(self, name, entry_id, storage_path):
+        """Initialize the sensor."""
+        # Example: If room is "Living Room", entity_id becomes sensor.living_room_target_lux_array
         self._attr_name = f"{name} Target Lux Array"
-        # Give it a unique ID so it can be managed via the UI
-        self._attr_unique_id = f"{entry_id}_target_curve"
-
-        # The state of a sensor has a 255 char limit. 
-        # We use 'loaded' as the state, and put the actual array in the attributes.
-        self._state = "loaded"
-
-        # Default array: 24 hours of 0 Lux
+        self._attr_unique_id = f"{entry_id}_target_lux_array"
+        self._attr_icon = "mdi:chart-bell-curve-cumulative"
+        
+        self.file_path = os.path.join(storage_path, "target_curve.json")
         self._points = [0] * 24
 
     async def async_added_to_hass(self):
-        """Restore previous curve when Home Assistant restarts."""
-        await super().async_added_to_hass()
+        """Run this exact moment the sensor connects to Home Assistant."""
+        await self._async_load_from_disk()
 
-        # Register a service to update this specific sensor from the UI
-        self.hass.services.async_register(
-            DOMAIN, 
-            "save_target_curve", 
-            self.handle_save_curve
-        )
+    async def _async_load_from_disk(self):
+        """Safely load the saved points from the hard drive."""
+        def read_file():
+            if os.path.exists(self.file_path):
+                try:
+                    with open(self.file_path, "r") as f:
+                        data = json.load(f)
+                        # Ensure it's actually a 24-item list before accepting it
+                        if isinstance(data, list) and len(data) == 24:
+                            return data
+                except Exception as e:
+                    _LOGGER.error("Could not read target curve for %s: %s", self._attr_name, e)
+            return [0] * 24
 
-        # Try to restore the state if HA restarted
-        last_state = await self.async_get_last_state()
-        if last_state and 'points' in last_state.attributes:
-            self._points = last_state.attributes['points']
-            _LOGGER.info("Restored Target Curve: %s", self._points)
-
-        # Update the global data dictionary so the PID controller can access it later
-        if self._entry_id in self.hass.data[DOMAIN]:
-             self.hass.data[DOMAIN][self._entry_id]["target_curve"] = self._points
-
-    async def handle_save_curve(self, call):
-        """Service callback to update the curve from the JS canvas."""
-        points = call.data.get("points", [])
-        entity_id_target = call.data.get("entity_id")
-
-        # Make sure the UI sent exactly 24 points and aimed it at THIS specific sensor
-        if len(points) == 24 and entity_id_target == self.entity_id:
-            self._points = points
-
-            # Update global dictionary for the PID controller
-            if self._entry_id in self.hass.data[DOMAIN]:
-                 self.hass.data[DOMAIN][self._entry_id]["target_curve"] = self._points
-
-            _LOGGER.info("Target Curve Updated via Service: %s", self._points)
-
-            # Force HA to update the UI
-            self.async_write_ha_state()
+        # Use executor_job so we don't block Home Assistant's async event loop while reading the file
+        self._points = await self.hass.async_add_executor_job(read_file)
+        self.async_write_ha_state()
 
     @property
-    def native_value(self):
-        return self._state
+    def state(self):
+        """Return the state of the sensor."""
+        # The state itself is just "Active". The real data lives in the attributes below.
+        return "Active"
 
     @property
     def extra_state_attributes(self):
-        return {"points": self._points}
+        """Return the state attributes, which contains our giant array of numbers."""
+        return {
+            "points": self._points
+        }
