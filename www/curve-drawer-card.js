@@ -10,7 +10,7 @@ window.customCards.push({
 });
 
 // ---------------------------------------------------------
-// 2. THE VISUAL EDITOR (For the Dashboard UI)
+// 2. THE VISUAL EDITOR (Native HTML Version)
 // ---------------------------------------------------------
 class SmartLightCurvesCardEditor extends HTMLElement {
   setConfig(config) {
@@ -20,44 +20,61 @@ class SmartLightCurvesCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     
-    // Build the editor safely in memory to bypass the HTML parser
     if (!this._rendered) {
       this._rendered = true;
       
+      // Prove to ourselves in the console that the new code loaded!
+      console.log("Loading Native HTML Editor v3");
+      
       this.container = document.createElement('div');
-      this.container.className = "card-config";
+      this.container.style.cssText = "padding: 16px; font-family: sans-serif;";
       
       const helpText = document.createElement('p');
-      helpText.style.cssText = "font-family: sans-serif; font-size: 14px; color: var(--secondary-text-color); margin-bottom: 12px;";
-      helpText.innerText = "Select the target curve sensor for this room:";
+      helpText.innerText = "Select the target curve sensor:";
+      helpText.style.cssText = "margin-top: 0; margin-bottom: 8px; color: var(--secondary-text-color);";
       this.container.appendChild(helpText);
 
-      // Construct the HA Entity Picker programmatically
-      this.entityPicker = document.createElement('ha-entity-picker');
-      this.entityPicker.hass = this._hass;
-      this.entityPicker.value = this._config.entity || '';
-      this.entityPicker.label = "Target Curve Sensor";
-      this.entityPicker.includeDomains = ["sensor"];
-      this.entityPicker.allowCustomEntity = true;
-      this.container.appendChild(this.entityPicker);
-
-      // Construct the Max Lux input
-      const luxDiv = document.createElement('div');
-      luxDiv.style.marginTop = "16px";
+      // Build a completely native, unbreakable HTML dropdown menu
+      this.select = document.createElement('select');
+      this.select.style.cssText = "width: 100%; padding: 8px; margin-bottom: 16px; border-radius: 4px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, white); color: var(--primary-text-color, black); font-size: 14px;";
       
-      this.luxInput = document.createElement('ha-textfield');
-      this.luxInput.label = "Y-Axis Max Lux";
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = "";
+      defaultOpt.text = "--- Select a Sensor ---";
+      this.select.appendChild(defaultOpt);
+
+      // Find every sensor in Home Assistant and add it to the dropdown
+      const sensors = Object.keys(this._hass.states).filter(eid => eid.startsWith('sensor.'));
+      sensors.sort().forEach(eid => {
+        const opt = document.createElement('option');
+        opt.value = eid;
+        const stateObj = this._hass.states[eid];
+        const friendlyName = stateObj.attributes.friendly_name || eid;
+        opt.text = `${friendlyName}`;
+        
+        if (this._config.entity === eid) {
+          opt.selected = true;
+        }
+        this.select.appendChild(opt);
+      });
+      this.container.appendChild(this.select);
+
+      const luxLabel = document.createElement('p');
+      luxLabel.innerText = "Y-Axis Max Lux:";
+      luxLabel.style.cssText = "margin-bottom: 8px; color: var(--secondary-text-color);";
+      this.container.appendChild(luxLabel);
+
+      this.luxInput = document.createElement('input');
       this.luxInput.type = "number";
       this.luxInput.value = this._config.max_lux || 500;
-      luxDiv.appendChild(this.luxInput);
-      
-      this.container.appendChild(luxDiv);
+      this.luxInput.style.cssText = "width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, white); color: var(--primary-text-color, black); font-size: 14px;";
+      this.container.appendChild(this.luxInput);
+
       this.appendChild(this.container);
 
-      // Since we literally just created the objects, these listeners cannot fail!
-      this.entityPicker.addEventListener('value-changed', (ev) => {
-        if (!this._config || this._config.entity === ev.detail.value) return;
-        this._config = { ...this._config, entity: ev.detail.value };
+      // Event Listeners for saving the config
+      this.select.addEventListener('change', (ev) => {
+        this._config = { ...this._config, entity: ev.target.value };
         this._fireConfigChanged();
       });
 
@@ -65,11 +82,6 @@ class SmartLightCurvesCardEditor extends HTMLElement {
         this._config = { ...this._config, max_lux: parseInt(ev.target.value) || 500 };
         this._fireConfigChanged();
       });
-    }
-    
-    // Keep the picker updated with HA's live state
-    if (this.entityPicker) {
-        this.entityPicker.hass = this._hass;
     }
   }
 
