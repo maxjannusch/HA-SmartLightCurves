@@ -1,6 +1,6 @@
 class SmartLightCurvesCard extends HTMLElement {
   setConfig(config) {
-    if (!config.entity) throw new Error('You need to define an entity (e.g. sensor.smart_room_lighting_target_lux_array)');
+    if (!config.entity) throw new Error('You need to define an entity');
     this.config = config;
   }
 
@@ -8,7 +8,6 @@ class SmartLightCurvesCard extends HTMLElement {
     this._hass = hass;
     if (!this.config) return;
 
-    // BUILD ONLY ONCE: Solves the null error loop
     if (!this.contentBuilt) {
       this.contentBuilt = true;
       this.style.cssText = "display: block; width: 100%;";
@@ -31,10 +30,6 @@ class SmartLightCurvesCard extends HTMLElement {
       container.appendChild(this.canvas);
       
       this.ctx = this.canvas.getContext('2d');
-      if (!this.ctx) {
-        console.error("SmartLightCurvesCard: Failed to get 2D context");
-        return;
-      }
 
       const controls = document.createElement('div');
       controls.style.cssText = "display: flex; justify-content: space-between; margin-top: 16px; align-items: center; width: 100%;";
@@ -67,6 +62,28 @@ class SmartLightCurvesCard extends HTMLElement {
       this.lastVal = -1;
       this.maxLux = parseInt(this.maxLuxInput.value) || 500;
 
+      // --- PERSISTENCE OVERRIDE ---
+      // Pulls from browser memory on reload so the curve doesn't disappear
+      const cached = localStorage.getItem(`slc_curve_${this.config.entity}`);
+      if (cached) {
+        try { this.points = JSON.parse(cached); } catch(e) {}
+      }
+
+      // --- LOGARITHMIC MATH ENGINES ---
+      // Converts a Lux value into a physical Y-pixel on the screen
+      this.valToY = (val, maxLux, height) => {
+        val = Math.max(0, Math.min(val, maxLux));
+        const r = Math.log10((val * 99 / maxLux) + 1) / 2;
+        return height * (1 - r);
+      };
+
+      // Converts a physical Y-pixel from your mouse into a Lux value
+      this.yToVal = (y, maxLux, height) => {
+        const r = 1 - (y / height);
+        const rawVal = (maxLux / 99) * (Math.pow(100, r) - 1);
+        return Math.max(0, Math.min(maxLux, Math.round(rawVal))); 
+      };
+
       this.maxLuxInput.addEventListener('change', (e) => {
         this.maxLux = parseInt(e.target.value) || 500;
         this.draw();
@@ -83,8 +100,9 @@ class SmartLightCurvesCard extends HTMLElement {
         const y = clientY - rect.top;
         
         const hour = Math.max(0, Math.min(23, Math.floor((x / rect.width) * 24)));
-        const rawVal = this.maxLux - (y / rect.height) * this.maxLux;
-        const val = Math.max(0, Math.min(this.maxLux, Math.round(rawVal / 10) * 10));
+        
+        // Calculate raw exact integer (no more 10-step rounding)
+        const val = this.yToVal(y, this.maxLux, rect.height);
         
         this.points[hour] = val;
         
@@ -92,7 +110,7 @@ class SmartLightCurvesCard extends HTMLElement {
           const step = hour > this.lastHour ? 1 : -1;
           for (let i = this.lastHour + step; i !== hour; i += step) {
             const fraction = Math.abs((i - this.lastHour) / (hour - this.lastHour));
-            this.points[i] = Math.round((this.lastVal + (val - this.lastVal) * fraction) / 10) * 10;
+            this.points[i] = Math.round(this.lastVal + (val - this.lastVal) * fraction);
           }
         }
         this.lastHour = hour;
@@ -117,12 +135,15 @@ class SmartLightCurvesCard extends HTMLElement {
               entity_id: this.config.entity,
               points: this.points 
           });
+          
+          // Back up to browser memory instantly
+          localStorage.setItem(`slc_curve_${this.config.entity}`, JSON.stringify(this.points));
+
           this.statusSpan.style.visibility = 'visible';
           setTimeout(() => this.statusSpan.style.visibility = 'hidden', 2000);
         }
       });
 
-      // Resize observer prevents size=0 bugs on some screens
       const resizeCanvas = () => {
         if (container.clientWidth > 0 && container.clientHeight > 0) {
           this.canvas.width = container.clientWidth;
@@ -135,6 +156,7 @@ class SmartLightCurvesCard extends HTMLElement {
       setTimeout(resizeCanvas, 50);
     }
 
+    // If the backend magically successfully persists the points, sync them
     if (hass.states[this.config.entity]) {
        const stateObj = hass.states[this.config.entity];
        if (stateObj.attributes && stateObj.attributes.points && Array.isArray(stateObj.attributes.points)) {
@@ -142,6 +164,7 @@ class SmartLightCurvesCard extends HTMLElement {
              const newPoints = stateObj.attributes.points;
              if (JSON.stringify(this.points) !== JSON.stringify(newPoints)) {
                 this.points = [...newPoints];
+                localStorage.setItem(`slc_curve_${this.config.entity}`, JSON.stringify(this.points));
                 this.draw();
              }
           }
@@ -154,12 +177,14 @@ class SmartLightCurvesCard extends HTMLElement {
     
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
+    // Draw Grid
     this.ctx.beginPath();
     this.ctx.strokeStyle = 'rgba(128,128,128,0.3)';
     this.ctx.fillStyle = 'rgba(128,128,128,0.8)';
     this.ctx.font = '11px sans-serif';
     this.ctx.lineWidth = 1;
 
+    // Vertical Hour Lines
     for(let i=0; i<24; i+=3) {
        let px = (i / 23) * this.canvas.width;
        this.ctx.moveTo(px, 0); 
@@ -167,19 +192,22 @@ class SmartLightCurvesCard extends HTMLElement {
        if (i > 0) this.ctx.fillText(i + 'h', px + 4, this.canvas.height - 6);
     }
 
-    for(let i=1; i<=4; i++) {
-        let py = this.canvas.height - (i/4) * this.canvas.height;
+    // Horizontal Logarithmic Target Lines
+    const gridVals = [10, 50, 100, 250, 500, 1000, 2500, 5000].filter(v => v <= this.maxLux);
+    for(let v of gridVals) {
+        let py = this.valToY(v, this.maxLux, this.canvas.height);
         this.ctx.moveTo(0, py);
         this.ctx.lineTo(this.canvas.width, py);
-        this.ctx.fillText(Math.round((i/4) * this.maxLux) + ' lx', 4, py - 6);
+        this.ctx.fillText(v + ' lx', 4, py - 6);
     }
     this.ctx.stroke();
 
+    // Draw Logarithmic Line
     this.ctx.beginPath();
-    this.ctx.moveTo(0, this.canvas.height - (this.points[0] / this.maxLux) * this.canvas.height);
+    this.ctx.moveTo(0, this.valToY(this.points[0], this.maxLux, this.canvas.height));
     for (let i = 1; i < 24; i++) {
        const px = (i / 23) * this.canvas.width;
-       const py = this.canvas.height - (this.points[i] / this.maxLux) * this.canvas.height;
+       const py = this.valToY(this.points[i], this.maxLux, this.canvas.height);
        this.ctx.lineTo(px, py);
     }
     this.ctx.strokeStyle = 'var(--primary-color, #03a9f4)';
@@ -187,6 +215,7 @@ class SmartLightCurvesCard extends HTMLElement {
     this.ctx.lineJoin = 'round';
     this.ctx.stroke();
 
+    // Fill under line
     this.ctx.lineTo(this.canvas.width, this.canvas.height);
     this.ctx.lineTo(0, this.canvas.height);
     this.ctx.closePath();
@@ -198,5 +227,3 @@ class SmartLightCurvesCard extends HTMLElement {
 if (!customElements.get('smart-light-curves-card')) {
   customElements.define('smart-light-curves-card', SmartLightCurvesCard);
 }
-
-console.log("Loaded SmartLightCurvesCard perfectly from Git Hook!");
