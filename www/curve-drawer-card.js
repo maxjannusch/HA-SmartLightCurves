@@ -1,12 +1,94 @@
-class SmartLightCurvesCard extends HTMLElement {
+// ---------------------------------------------------------
+// 1. REGISTER THE CARD IN HOME ASSISTANT'S UI PICKER
+// ---------------------------------------------------------
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "smart-light-curves-card",
+  name: "Smart Light Curves",
+  description: "Draw and save 24-hour target lux curves for your smart rooms.",
+  preview: true,
+});
+
+// ---------------------------------------------------------
+// 2. THE VISUAL EDITOR (For the Dashboard UI)
+// ---------------------------------------------------------
+class SmartLightCurvesCardEditor extends HTMLElement {
   setConfig(config) {
-    if (!config.entity) throw new Error('You need to define an entity');
+    this._config = config;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._rendered) {
+      this._rendered = true;
+      
+      this.innerHTML = `
+        
+          Select the target curve sensor for this room:
+          
+          
+
+          
+            
+          
+        
+      `;
+      
+      // Listen for entity selection changes
+      const entityPicker = this.querySelector('ha-entity-picker');
+      entityPicker.addEventListener('value-changed', (ev) => {
+        if (!this._config || this._config.entity === ev.detail.value) return;
+        this._config = { ...this._config, entity: ev.detail.value };
+        this._fireConfigChanged();
+      });
+
+      // Listen for max lux changes
+      const maxLuxInput = this.querySelector('ha-textfield');
+      maxLuxInput.addEventListener('change', (ev) => {
+        this._config = { ...this._config, max_lux: parseInt(ev.target.value) || 500 };
+        this._fireConfigChanged();
+      });
+    }
+  }
+
+  _fireConfigChanged() {
+    const event = new CustomEvent('config-changed', {
+      detail: { config: this._config },
+      bubbles: true,
+      composed: true,
+    });
+    this.dispatchEvent(event);
+  }
+}
+customElements.define("smart-light-curves-card-editor", SmartLightCurvesCardEditor);
+
+// ---------------------------------------------------------
+// 3. THE MAIN CARD (No Caching, Dynamic Title)
+// ---------------------------------------------------------
+class SmartLightCurvesCard extends HTMLElement {
+  
+  // Connect the editor to the card
+  static getConfigElement() {
+    return document.createElement("smart-light-curves-card-editor");
+  }
+
+  // Default settings when the card is first added
+  static getStubConfig() {
+    return { entity: "", max_lux: 500 };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error('Please select an entity in the visual editor.');
     this.config = config;
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this.config) return;
+    if (!this.config || !this.config.entity) return;
+
+    // Fetch state from server directly
+    const stateObj = hass.states[this.config.entity];
+    const friendlyName = stateObj && stateObj.attributes.friendly_name ? stateObj.attributes.friendly_name.replace(' Target Lux Array', '') : "Room";
 
     if (!this.contentBuilt) {
       this.contentBuilt = true;
@@ -16,10 +98,10 @@ class SmartLightCurvesCard extends HTMLElement {
       card.style.cssText = "padding: 16px; display: block; box-sizing: border-box;";
       this.appendChild(card);
       
-      const title = document.createElement('h2');
-      title.innerText = "Target Brightness (Lux) - 24h Profile";
-      title.style.cssText = "margin: 0 0 16px 0; font-family: var(--paper-font-headline_-_font-family, sans-serif); font-size: 20px; font-weight: 400; color: var(--primary-text-color, black); display: block;";
-      card.appendChild(title);
+      this.titleElement = document.createElement('h2');
+      this.titleElement.innerText = `${friendlyName} - Target Brightness`;
+      this.titleElement.style.cssText = "margin: 0 0 16px 0; font-family: var(--paper-font-headline_-_font-family, sans-serif); font-size: 20px; font-weight: 400; color: var(--primary-text-color, black); display: block;";
+      card.appendChild(this.titleElement);
 
       const container = document.createElement('div');
       container.style.cssText = "width: 100%; height: 250px; background: rgba(128,128,128,0.05); border-radius: 6px; border: 1px solid rgba(128,128,128,0.2); position: relative; display: block; box-sizing: border-box;";
@@ -62,22 +144,13 @@ class SmartLightCurvesCard extends HTMLElement {
       this.lastVal = -1;
       this.maxLux = parseInt(this.maxLuxInput.value) || 500;
 
-      // --- PERSISTENCE OVERRIDE ---
-      // Pulls from browser memory on reload so the curve doesn't disappear
-      const cached = localStorage.getItem(`slc_curve_${this.config.entity}`);
-      if (cached) {
-        try { this.points = JSON.parse(cached); } catch(e) {}
-      }
-
-      // --- LOGARITHMIC MATH ENGINES ---
-      // Converts a Lux value into a physical Y-pixel on the screen
+      // Math Engines
       this.valToY = (val, maxLux, height) => {
         val = Math.max(0, Math.min(val, maxLux));
         const r = Math.log10((val * 99 / maxLux) + 1) / 2;
         return height * (1 - r);
       };
 
-      // Converts a physical Y-pixel from your mouse into a Lux value
       this.yToVal = (y, maxLux, height) => {
         const r = 1 - (y / height);
         const rawVal = (maxLux / 99) * (Math.pow(100, r) - 1);
@@ -100,8 +173,6 @@ class SmartLightCurvesCard extends HTMLElement {
         const y = clientY - rect.top;
         
         const hour = Math.max(0, Math.min(23, Math.floor((x / rect.width) * 24)));
-        
-        // Calculate raw exact integer (no more 10-step rounding)
         const val = this.yToVal(y, this.maxLux, rect.height);
         
         this.points[hour] = val;
@@ -135,10 +206,6 @@ class SmartLightCurvesCard extends HTMLElement {
               entity_id: this.config.entity,
               points: this.points 
           });
-          
-          // Back up to browser memory instantly
-          localStorage.setItem(`slc_curve_${this.config.entity}`, JSON.stringify(this.points));
-
           this.statusSpan.style.visibility = 'visible';
           setTimeout(() => this.statusSpan.style.visibility = 'hidden', 2000);
         }
@@ -156,17 +223,19 @@ class SmartLightCurvesCard extends HTMLElement {
       setTimeout(resizeCanvas, 50);
     }
 
-    // If the backend magically successfully persists the points, sync them
-    if (hass.states[this.config.entity]) {
-       const stateObj = hass.states[this.config.entity];
-       if (stateObj.attributes && stateObj.attributes.points && Array.isArray(stateObj.attributes.points)) {
-          if (!this.isDrawing) {
-             const newPoints = stateObj.attributes.points;
-             if (JSON.stringify(this.points) !== JSON.stringify(newPoints)) {
-                this.points = [...newPoints];
-                localStorage.setItem(`slc_curve_${this.config.entity}`, JSON.stringify(this.points));
-                this.draw();
-             }
+    // --- SERVER IS THE SINGLE SOURCE OF TRUTH ---
+    // Dynamically update the title if the name changes
+    if (this.titleElement && friendlyName) {
+       this.titleElement.innerText = `${friendlyName} - Target Brightness`;
+    }
+
+    // Pull points strictly from the server state machine
+    if (stateObj && stateObj.attributes && stateObj.attributes.points && Array.isArray(stateObj.attributes.points)) {
+       if (!this.isDrawing) {
+          const newPoints = stateObj.attributes.points;
+          if (JSON.stringify(this.points) !== JSON.stringify(newPoints)) {
+             this.points = [...newPoints];
+             this.draw();
           }
        }
     }
@@ -177,14 +246,12 @@ class SmartLightCurvesCard extends HTMLElement {
     
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Draw Grid
     this.ctx.beginPath();
     this.ctx.strokeStyle = 'rgba(128,128,128,0.3)';
     this.ctx.fillStyle = 'rgba(128,128,128,0.8)';
     this.ctx.font = '11px sans-serif';
     this.ctx.lineWidth = 1;
 
-    // Vertical Hour Lines
     for(let i=0; i<24; i+=3) {
        let px = (i / 23) * this.canvas.width;
        this.ctx.moveTo(px, 0); 
@@ -192,7 +259,6 @@ class SmartLightCurvesCard extends HTMLElement {
        if (i > 0) this.ctx.fillText(i + 'h', px + 4, this.canvas.height - 6);
     }
 
-    // Horizontal Logarithmic Target Lines
     const gridVals = [10, 50, 100, 250, 500, 1000, 2500, 5000].filter(v => v <= this.maxLux);
     for(let v of gridVals) {
         let py = this.valToY(v, this.maxLux, this.canvas.height);
@@ -202,7 +268,6 @@ class SmartLightCurvesCard extends HTMLElement {
     }
     this.ctx.stroke();
 
-    // Draw Logarithmic Line
     this.ctx.beginPath();
     this.ctx.moveTo(0, this.valToY(this.points[0], this.maxLux, this.canvas.height));
     for (let i = 1; i < 24; i++) {
@@ -215,7 +280,6 @@ class SmartLightCurvesCard extends HTMLElement {
     this.ctx.lineJoin = 'round';
     this.ctx.stroke();
 
-    // Fill under line
     this.ctx.lineTo(this.canvas.width, this.canvas.height);
     this.ctx.lineTo(0, this.canvas.height);
     this.ctx.closePath();
@@ -223,7 +287,4 @@ class SmartLightCurvesCard extends HTMLElement {
     this.ctx.fill();
   }
 }
-
-if (!customElements.get('smart-light-curves-card')) {
-  customElements.define('smart-light-curves-card', SmartLightCurvesCard);
-}
+customElements.define('smart-light-curves-card', SmartLightCurvesCard);
