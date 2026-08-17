@@ -10,21 +10,24 @@ window.customCards.push({
 });
 
 // ---------------------------------------------------------
-// 2. THE VISUAL EDITOR (Native HTML Version)
+// 2. THE VISUAL EDITOR 
 // ---------------------------------------------------------
 class SmartLightCurvesCardEditor extends HTMLElement {
   setConfig(config) {
-    this._config = config;
+    // Guard: Ensure config is always a valid object
+    this._config = config ? { ...config } : { entity: "", max_lux: 500 };
   }
 
   set hass(hass) {
     this._hass = hass;
     
+    // Guard: If HA calls 'set hass' before 'setConfig', protect against undefined
+    if (!this._config) {
+      this._config = { entity: "", max_lux: 500 };
+    }
+
     if (!this._rendered) {
       this._rendered = true;
-      
-      // Prove to ourselves in the console that the new code loaded!
-      console.log("Loading Native HTML Editor v3");
       
       this.container = document.createElement('div');
       this.container.style.cssText = "padding: 16px; font-family: sans-serif;";
@@ -34,7 +37,6 @@ class SmartLightCurvesCardEditor extends HTMLElement {
       helpText.style.cssText = "margin-top: 0; margin-bottom: 8px; color: var(--secondary-text-color);";
       this.container.appendChild(helpText);
 
-      // Build a completely native, unbreakable HTML dropdown menu
       this.select = document.createElement('select');
       this.select.style.cssText = "width: 100%; padding: 8px; margin-bottom: 16px; border-radius: 4px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, white); color: var(--primary-text-color, black); font-size: 14px;";
       
@@ -43,7 +45,6 @@ class SmartLightCurvesCardEditor extends HTMLElement {
       defaultOpt.text = "--- Select a Sensor ---";
       this.select.appendChild(defaultOpt);
 
-      // Find every sensor in Home Assistant and add it to the dropdown
       const sensors = Object.keys(this._hass.states).filter(eid => eid.startsWith('sensor.'));
       sensors.sort().forEach(eid => {
         const opt = document.createElement('option');
@@ -72,7 +73,6 @@ class SmartLightCurvesCardEditor extends HTMLElement {
 
       this.appendChild(this.container);
 
-      // Event Listeners for saving the config
       this.select.addEventListener('change', (ev) => {
         this._config = { ...this._config, entity: ev.target.value };
         this._fireConfigChanged();
@@ -97,34 +97,37 @@ class SmartLightCurvesCardEditor extends HTMLElement {
 customElements.define("smart-light-curves-card-editor", SmartLightCurvesCardEditor);
 
 // ---------------------------------------------------------
-// 3. THE MAIN CARD (No Caching, Dynamic Title)
+// 3. THE MAIN CARD
 // ---------------------------------------------------------
 class SmartLightCurvesCard extends HTMLElement {
-  
-  // Connect the editor to the card
   static getConfigElement() {
     return document.createElement("smart-light-curves-card-editor");
   }
 
-  // Default settings when the card is first added
   static getStubConfig() {
     return { entity: "", max_lux: 500 };
   }
 
   setConfig(config) {
-    if (!config.entity) throw new Error('Please select an entity in the visual editor.');
-    this.config = config;
+    // No more throwing fatal errors! We will handle empty entities gracefully.
+    this.config = config || {};
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this.config || !this.config.entity) return;
+    
+    // Guard: If no entity is selected, show a friendly placeholder and stop rendering
+    if (!this.config || !this.config.entity) {
+      this.innerHTML = `Please select a Target Curve Sensor from the dropdown above.`;
+      this.contentBuilt = false; // Reset so the canvas builds when they finally pick one
+      return;
+    }
 
-    // Fetch state from server directly
     const stateObj = hass.states[this.config.entity];
     const friendlyName = stateObj && stateObj.attributes.friendly_name ? stateObj.attributes.friendly_name.replace(' Target Lux Array', '') : "Room";
 
     if (!this.contentBuilt) {
+      this.innerHTML = ''; // Clear the placeholder message
       this.contentBuilt = true;
       this.style.cssText = "display: block; width: 100%;";
 
@@ -257,13 +260,10 @@ class SmartLightCurvesCard extends HTMLElement {
       setTimeout(resizeCanvas, 50);
     }
 
-    // --- SERVER IS THE SINGLE SOURCE OF TRUTH ---
-    // Dynamically update the title if the name changes
     if (this.titleElement && friendlyName) {
        this.titleElement.innerText = `${friendlyName} - Target Brightness`;
     }
 
-    // Pull points strictly from the server state machine
     if (stateObj && stateObj.attributes && stateObj.attributes.points && Array.isArray(stateObj.attributes.points)) {
        if (!this.isDrawing) {
           const newPoints = stateObj.attributes.points;
