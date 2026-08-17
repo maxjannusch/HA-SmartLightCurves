@@ -32,6 +32,16 @@ class SmartLightTargetCurveSensor(SensorEntity):
         self.file_path = os.path.join(storage_path, "target_curve.json")
         self._points = [0] * 24
 
+        @property
+        def device_info(self):
+            """Return device info for this sensor."""
+            return {
+                "identifiers": {(DOMAIN, self._entry_id)},
+                "name": self._attr_name.replace(" Target Lux Array", ""),
+                "manufacturer": "Custom",
+                "model": "Smart Light Curve",
+        }
+
     async def async_added_to_hass(self):
         """Run this exact moment the sensor connects to Home Assistant."""
         await self._async_load_from_disk()
