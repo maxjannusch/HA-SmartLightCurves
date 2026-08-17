@@ -19,35 +19,57 @@ class SmartLightCurvesCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    
+    // Build the editor safely in memory to bypass the HTML parser
     if (!this._rendered) {
       this._rendered = true;
       
-      this.innerHTML = `
-        
-          Select the target curve sensor for this room:
-          
-          
-
-          
-            
-          
-        
-      `;
+      this.container = document.createElement('div');
+      this.container.className = "card-config";
       
-      // Listen for entity selection changes
-      const entityPicker = this.querySelector('ha-entity-picker');
-      entityPicker.addEventListener('value-changed', (ev) => {
+      const helpText = document.createElement('p');
+      helpText.style.cssText = "font-family: sans-serif; font-size: 14px; color: var(--secondary-text-color); margin-bottom: 12px;";
+      helpText.innerText = "Select the target curve sensor for this room:";
+      this.container.appendChild(helpText);
+
+      // Construct the HA Entity Picker programmatically
+      this.entityPicker = document.createElement('ha-entity-picker');
+      this.entityPicker.hass = this._hass;
+      this.entityPicker.value = this._config.entity || '';
+      this.entityPicker.label = "Target Curve Sensor";
+      this.entityPicker.includeDomains = ["sensor"];
+      this.entityPicker.allowCustomEntity = true;
+      this.container.appendChild(this.entityPicker);
+
+      // Construct the Max Lux input
+      const luxDiv = document.createElement('div');
+      luxDiv.style.marginTop = "16px";
+      
+      this.luxInput = document.createElement('ha-textfield');
+      this.luxInput.label = "Y-Axis Max Lux";
+      this.luxInput.type = "number";
+      this.luxInput.value = this._config.max_lux || 500;
+      luxDiv.appendChild(this.luxInput);
+      
+      this.container.appendChild(luxDiv);
+      this.appendChild(this.container);
+
+      // Since we literally just created the objects, these listeners cannot fail!
+      this.entityPicker.addEventListener('value-changed', (ev) => {
         if (!this._config || this._config.entity === ev.detail.value) return;
         this._config = { ...this._config, entity: ev.detail.value };
         this._fireConfigChanged();
       });
 
-      // Listen for max lux changes
-      const maxLuxInput = this.querySelector('ha-textfield');
-      maxLuxInput.addEventListener('change', (ev) => {
+      this.luxInput.addEventListener('change', (ev) => {
         this._config = { ...this._config, max_lux: parseInt(ev.target.value) || 500 };
         this._fireConfigChanged();
       });
+    }
+    
+    // Keep the picker updated with HA's live state
+    if (this.entityPicker) {
+        this.entityPicker.hass = this._hass;
     }
   }
 
