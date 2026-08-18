@@ -141,8 +141,12 @@ class LearningModeSwitch(SwitchEntity):
             if occ_state and occ_state.state == 'on':
                 _LOGGER.warning("Room is occupied! Calibration might be skewed.")
 
-            # Force light off immediately to grab a true baseline
-            await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
+            # Force light off immediately to grab initial baseline (Blocking call)
+            await self.hass.services.async_call(
+                'light', 'turn_off', 
+                {'entity_id': self._light_id}, 
+                blocking=True
+            )
             await asyncio.sleep(5) 
             
             # 3. Read Ambient Lux (Baseline)
@@ -155,7 +159,8 @@ class LearningModeSwitch(SwitchEntity):
             for pct in range(10, 101, 10):
                 await self.hass.services.async_call(
                     'light', 'turn_on', 
-                    {'entity_id': self._light_id, 'brightness_pct': pct}
+                    {'entity_id': self._light_id, 'brightness_pct': pct},
+                    blocking=True
                 )
                 
                 # Wait for light to fade AND sensor to broadcast
@@ -172,11 +177,14 @@ class LearningModeSwitch(SwitchEntity):
                 
                 _LOGGER.info(f"Calibration Step {pct}%: {current_lux} lx")
                 
-                # --- NEW: SENSOR DEBOUNCE RESET ---
+                # --- SENSOR DEBOUNCE RESET ---
                 if pct < 100:
                     _LOGGER.info("Turning off light to reset sensor debounce...")
-                    # Explicitly turn off the light
-                    await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
+                    await self.hass.services.async_call(
+                        'light', 'turn_off', 
+                        {'entity_id': self._light_id},
+                        blocking=True
+                    )
                     # Give the darkness plenty of time to register and the bulb to turn completely off
                     await asyncio.sleep(10) 
 
@@ -206,7 +214,11 @@ class LearningModeSwitch(SwitchEntity):
             _LOGGER.error(f"Error during calibration: {e}")
         finally:
             # 6. Clean up
-            await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
+            await self.hass.services.async_call(
+                'light', 'turn_off', 
+                {'entity_id': self._light_id},
+                blocking=True
+            )
             self._is_on = False
             self.async_write_ha_state()
             self._calibration_task = None
