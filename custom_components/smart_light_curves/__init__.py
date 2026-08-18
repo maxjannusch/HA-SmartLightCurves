@@ -23,7 +23,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entity_id = call.data.get("entity_id")
             points = call.data.get("points")
             
-            # 1. Trace the entity_id backward to find which room/instance it belongs to
             registry = er.async_get(hass)
             entity_entry = registry.async_get(entity_id)
             
@@ -35,20 +34,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     storage_path = instance_data["storage_path"]
                     file_path = os.path.join(storage_path, "target_curve.json")
                     
-                    # 2. Write the 24-hour curve permanently to the room's folder
+                    # 1. UPDATE SHARED MEMORY (The Single Source of Truth)
+                    # This ensures the Sensor and the Controller immediately see the new curve!
+                    instance_data["target_curve"] = points
+                    
+                    # 2. Save to disk permanently
                     def save_to_disk():
                         with open(file_path, "w") as f:
                             json.dump(points, f)
                     
                     await hass.async_add_executor_job(save_to_disk)
                     _LOGGER.info("Saved target curve for %s to %s", entity_id, file_path)
-                    
-                    # (Optional) If your controller is listening, update it in real-time here
-                    # controller = instance_data.get("pid_controller")
-                    # if controller:
-                    #     controller.update_curve(points)
 
-            # 3. Update the volatile UI state so the frontend updates instantly
+            # 3. Update the UI state instantly
             current_state = hass.states.get(entity_id)
             if current_state:
                 new_attrs = dict(current_state.attributes)
@@ -65,25 +63,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             })
         )
 
-    # 1. Grab the name the user typed in the UI (e.g., "Living Room")
     safe_name = entry.data.get("name", "Room").replace(" ", "_")
-    
-    # 3. Create a unique path
     instance_storage_path = hass.config.path(DOMAIN, safe_name)
 
     def create_storage_dir():
         if not os.path.exists(instance_storage_path):
             os.makedirs(instance_storage_path)
-            _LOGGER.info("Created learning data directory for %s at %s", safe_name, instance_storage_path)
 
     await hass.async_add_executor_job(create_storage_dir)
 
-    # Store this specific path
+    # Initialize the central shared memory dictionary for this room
     hass.data[DOMAIN][entry.entry_id] = {
         "storage_path": instance_storage_path,
         "config_data": dict(entry.data),
         "pid_controller": None,
-        "learning_engine": None 
+        "target_curve": [0] * 24  # Default empty curve so controller doesn't crash on boot
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
