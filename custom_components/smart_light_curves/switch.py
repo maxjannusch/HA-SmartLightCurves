@@ -141,7 +141,7 @@ class LearningModeSwitch(SwitchEntity):
             if occ_state and occ_state.state == 'on':
                 _LOGGER.warning("Room is occupied! Calibration might be skewed.")
 
-            # 2. Turn off the light and wait for it to fade + sensor to update
+            # Force light off immediately to grab a true baseline
             await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
             await asyncio.sleep(5) 
             
@@ -158,7 +158,7 @@ class LearningModeSwitch(SwitchEntity):
                     {'entity_id': self._light_id, 'brightness_pct': pct}
                 )
                 
-                # Wait for light to fade AND sensor to broadcast (15s for extra safety)
+                # Wait for light to fade AND sensor to broadcast
                 await asyncio.sleep(15) 
                 
                 lux_state = self.hass.states.get(self._lux_id)
@@ -173,11 +173,12 @@ class LearningModeSwitch(SwitchEntity):
                 _LOGGER.info(f"Calibration Step {pct}%: {current_lux} lx")
                 
                 # --- NEW: SENSOR DEBOUNCE RESET ---
-                # Turn off the light between steps to force the sensor to register a massive state change
                 if pct < 100:
                     _LOGGER.info("Turning off light to reset sensor debounce...")
+                    # Explicitly turn off the light
                     await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
-                    await asyncio.sleep(10) # Wait 10 seconds for the darkness to register
+                    # Give the darkness plenty of time to register and the bulb to turn completely off
+                    await asyncio.sleep(10) 
 
             # 5. Save the raw data to a JSON file
             storage_path = self.hass.data[DOMAIN][self._config_entry.entry_id]["storage_path"]
