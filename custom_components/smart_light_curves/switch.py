@@ -72,8 +72,8 @@ class LearningModeSwitch(SwitchEntity):
                 if not raw_points:
                     continue
 
-                # 1. CLEAN: Enforce strictly increasing values (Filter out sensor debouncing)
-                clean_x = [0] # 0% brightness = 0 contribution
+                # 1. CLEAN: Enforce strictly increasing values
+                clean_x = [0]
                 clean_y = [0.0]
                 
                 last_val = 0.0
@@ -81,13 +81,11 @@ class LearningModeSwitch(SwitchEntity):
                     pct = pt["light_pct"]
                     val = pt["contribution"]
                     
-                    # Only accept the data point if it actually registered an increase in light
                     if val > last_val:
                         clean_x.append(pct)
                         clean_y.append(val)
                         last_val = val
                 
-                # If the sensor was so unresponsive we didn't get enough points, discard the run
                 if len(clean_x) < 3:
                     _LOGGER.warning(f"Run {file} had too few valid data points. Discarding from aggregate.")
                     continue
@@ -100,7 +98,6 @@ class LearningModeSwitch(SwitchEntity):
                     elif x >= clean_x[-1]:
                         y = clean_y[-1]
                     else:
-                        # Linear interpolation between the two closest valid points
                         for i in range(len(clean_x) - 1):
                             x1, x2 = clean_x[i], clean_x[i+1]
                             y1, y2 = clean_y[i], clean_y[i+1]
@@ -115,7 +112,7 @@ class LearningModeSwitch(SwitchEntity):
                 _LOGGER.error("Error processing %s: %s", file, e)
 
         if not all_runs:
-            _LOGGER.warning("No valid calibration data found to aggregate.")
+            _LOGGER.warning("No valid calibration data found to aggregate. Master curve not generated.")
             return
 
         # 3. AGGREGATE: Calculate the Median for each percentage point across all runs
@@ -132,7 +129,7 @@ class LearningModeSwitch(SwitchEntity):
                 "master_curve": master_curve
             }, f, indent=4)
         
-        _LOGGER.info(f"Master curve built successfully using {len(all_runs)} runs.")
+        _LOGGER.info(f"Master curve built successfully using {len(all_runs)} runs. Saved to {master_file}")
 
     async def _run_calibration(self):
         """The actual learning engine routine."""
@@ -174,6 +171,13 @@ class LearningModeSwitch(SwitchEntity):
                 })
                 
                 _LOGGER.info(f"Calibration Step {pct}%: {current_lux} lx")
+                
+                # --- NEW: SENSOR DEBOUNCE RESET ---
+                # Turn off the light between steps to force the sensor to register a massive state change
+                if pct < 100:
+                    _LOGGER.info("Turning off light to reset sensor debounce...")
+                    await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
+                    await asyncio.sleep(10) # Wait 10 seconds for the darkness to register
 
             # 5. Save the raw data to a JSON file
             storage_path = self.hass.data[DOMAIN][self._config_entry.entry_id]["storage_path"]
@@ -187,11 +191,9 @@ class LearningModeSwitch(SwitchEntity):
             }
 
             def save_and_aggregate():
-                # Write the individual raw run
                 with open(filepath, 'w') as f:
                     json.dump(calibration_data, f, indent=4)
                 
-                # Trigger the massive math engine
                 self._aggregate_calibrations(storage_path)
 
             await self.hass.async_add_executor_job(save_and_aggregate)
