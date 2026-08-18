@@ -34,24 +34,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     storage_path = instance_data["storage_path"]
                     file_path = os.path.join(storage_path, "target_curve.json")
                     
-                    # 1. UPDATE SHARED MEMORY (The Single Source of Truth)
-                    # This ensures the Sensor and the Controller immediately see the new curve!
-                    instance_data["target_curve"] = points
-                    
-                    # 2. Save to disk permanently
                     def save_to_disk():
                         with open(file_path, "w") as f:
                             json.dump(points, f)
                     
                     await hass.async_add_executor_job(save_to_disk)
                     _LOGGER.info("Saved target curve for %s to %s", entity_id, file_path)
-
-            # 3. Update the UI state instantly
-            current_state = hass.states.get(entity_id)
-            if current_state:
-                new_attrs = dict(current_state.attributes)
-                new_attrs["points"] = points
-                hass.states.async_set(entity_id, current_state.state, new_attrs)
+                    
+                    # 10s Revert Bug Fix: Tell the sensor object to natively update itself!
+                    sensor_obj = instance_data.get("curve_sensor")
+                    if sensor_obj:
+                        sensor_obj.update_points(points)
 
         hass.services.async_register(
             DOMAIN, 
@@ -72,12 +65,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.async_add_executor_job(create_storage_dir)
 
-    # Initialize the central shared memory dictionary for this room
+    # Initialize the shared memory block
     hass.data[DOMAIN][entry.entry_id] = {
         "storage_path": instance_storage_path,
         "config_data": dict(entry.data),
         "pid_controller": None,
-        "target_curve": [0] * 24  # Default empty curve so controller doesn't crash on boot
+        "curve_sensor": None # sensor.py registers itself here
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -93,5 +86,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        controller = hass.data[DOMAIN][entry.entry_id].get("pid_controller")
+        if controller:
+            controller.stop()
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
