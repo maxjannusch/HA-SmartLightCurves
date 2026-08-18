@@ -2,6 +2,8 @@ import logging
 import asyncio
 import json
 import os
+import glob
+import statistics
 from datetime import datetime
 
 from homeassistant.components.switch import SwitchEntity
@@ -26,7 +28,6 @@ class LearningModeSwitch(SwitchEntity):
         self._is_on = False
         self._calibration_task = None
         
-        # Fetch the hardware the user selected during the UI setup
         self._light_id = config_entry.data.get("light_entity")
         self._lux_id = config_entry.data.get("lux_sensor")
         self._occ_id = config_entry.data.get("occupancy_sensor")
@@ -43,7 +44,6 @@ class LearningModeSwitch(SwitchEntity):
         self._is_on = True
         self.async_write_ha_state()
         
-        # Run the heavy lifting in a background task so we don't freeze HA
         self._calibration_task = self.hass.async_create_task(self._run_calibration())
 
     async def async_turn_off(self, **kwargs):
@@ -56,6 +56,84 @@ class LearningModeSwitch(SwitchEntity):
         self.async_write_ha_state()
         _LOGGER.info("Calibration aborted manually.")
 
+    def _aggregate_calibrations(self, storage_path):
+        """Clean, Interpolate, and Aggregate all historical runs into a Master Curve."""
+        search_pattern = os.path.join(storage_path, "calibration_*.json")
+        file_list = glob.glob(search_pattern)
+        
+        all_runs = []
+
+        for file in file_list:
+            try:
+                with open(file, 'r') as f:
+                    data = json.load(f)
+                
+                raw_points = data.get("data", [])
+                if not raw_points:
+                    continue
+
+                # 1. CLEAN: Enforce strictly increasing values (Filter out sensor debouncing)
+                clean_x = [0] # 0% brightness = 0 contribution
+                clean_y = [0.0]
+                
+                last_val = 0.0
+                for pt in raw_points:
+                    pct = pt["light_pct"]
+                    val = pt["contribution"]
+                    
+                    # Only accept the data point if it actually registered an increase in light
+                    if val > last_val:
+                        clean_x.append(pct)
+                        clean_y.append(val)
+                        last_val = val
+                
+                # If the sensor was so unresponsive we didn't get enough points, discard the run
+                if len(clean_x) < 3:
+                    _LOGGER.warning(f"Run {file} had too few valid data points. Discarding from aggregate.")
+                    continue
+                    
+                # 2. INTERPOLATE: Fill in the gaps from 1% to 100%
+                run_curve = {}
+                for x in range(1, 101):
+                    if x <= clean_x[0]:
+                        y = clean_y[0]
+                    elif x >= clean_x[-1]:
+                        y = clean_y[-1]
+                    else:
+                        # Linear interpolation between the two closest valid points
+                        for i in range(len(clean_x) - 1):
+                            x1, x2 = clean_x[i], clean_x[i+1]
+                            y1, y2 = clean_y[i], clean_y[i+1]
+                            if x1 <= x <= x2:
+                                y = y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+                                break
+                    run_curve[x] = y
+                
+                all_runs.append(run_curve)
+                
+            except Exception as e:
+                _LOGGER.error("Error processing %s: %s", file, e)
+
+        if not all_runs:
+            _LOGGER.warning("No valid calibration data found to aggregate.")
+            return
+
+        # 3. AGGREGATE: Calculate the Median for each percentage point across all runs
+        master_curve = {}
+        for pct in range(1, 101):
+            vals = [run[pct] for run in all_runs]
+            master_curve[str(pct)] = round(statistics.median(vals), 2)
+            
+        master_file = os.path.join(storage_path, "master_calibration.json")
+        with open(master_file, 'w') as f:
+            json.dump({
+                "last_updated": datetime.now().isoformat(),
+                "runs_aggregated": len(all_runs),
+                "master_curve": master_curve
+            }, f, indent=4)
+        
+        _LOGGER.info(f"Master curve built successfully using {len(all_runs)} runs.")
+
     async def _run_calibration(self):
         """The actual learning engine routine."""
         try:
@@ -64,7 +142,7 @@ class LearningModeSwitch(SwitchEntity):
             # 1. Check Occupancy
             occ_state = self.hass.states.get(self._occ_id)
             if occ_state and occ_state.state == 'on':
-                _LOGGER.warning("Room is occupied! Calibration might be skewed by shadows.")
+                _LOGGER.warning("Room is occupied! Calibration might be skewed.")
 
             # 2. Turn off the light and wait for it to fade + sensor to update
             await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
@@ -83,9 +161,8 @@ class LearningModeSwitch(SwitchEntity):
                     {'entity_id': self._light_id, 'brightness_pct': pct}
                 )
                 
-                # Wait for light to physically fade AND the lux sensor to broadcast
-                # DELAY BETWEEN STEPS
-                await asyncio.sleep(12) 
+                # Wait for light to fade AND sensor to broadcast (15s for extra safety)
+                await asyncio.sleep(15) 
                 
                 lux_state = self.hass.states.get(self._lux_id)
                 current_lux = float(lux_state.state) if lux_state and lux_state.state not in ['unavailable', 'unknown'] else ambient_lux
@@ -98,7 +175,7 @@ class LearningModeSwitch(SwitchEntity):
                 
                 _LOGGER.info(f"Calibration Step {pct}%: {current_lux} lx")
 
-            # 5. Save the data to a JSON file
+            # 5. Save the raw data to a JSON file
             storage_path = self.hass.data[DOMAIN][self._config_entry.entry_id]["storage_path"]
             filename = f"calibration_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             filepath = os.path.join(storage_path, filename)
@@ -109,20 +186,23 @@ class LearningModeSwitch(SwitchEntity):
                 "data": data_points
             }
 
-            # File writing blocks the async loop, so we run it in an executor job
-            def save_file():
+            def save_and_aggregate():
+                # Write the individual raw run
                 with open(filepath, 'w') as f:
                     json.dump(calibration_data, f, indent=4)
+                
+                # Trigger the massive math engine
+                self._aggregate_calibrations(storage_path)
 
-            await self.hass.async_add_executor_job(save_file)
-            _LOGGER.info(f"Calibration complete! Saved to {filepath}")
+            await self.hass.async_add_executor_job(save_and_aggregate)
+            _LOGGER.info(f"Calibration complete! Saved raw data to {filepath}")
 
         except asyncio.CancelledError:
             _LOGGER.info("Calibration task was cancelled.")
         except Exception as e:
             _LOGGER.error(f"Error during calibration: {e}")
         finally:
-            # 6. Clean up: Turn light off and reset switch
+            # 6. Clean up
             await self.hass.services.async_call('light', 'turn_off', {'entity_id': self._light_id})
             self._is_on = False
             self.async_write_ha_state()
