@@ -80,6 +80,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id]["pid_controller"] = controller
     await controller.start()
 
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -91,3 +93,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             controller.stop()
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Reload integration when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)

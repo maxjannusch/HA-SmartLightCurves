@@ -13,15 +13,21 @@ class SmartLightController:
         self.hass = hass
         self.entry_id = config_entry.entry_id
         
-        self.light_id = config_entry.data.get("light_entity")
-        self.lux_id = config_entry.data.get("lux_sensor")
-        self.occ_id = config_entry.data.get("occupancy_sensor")
+        # Helper function to check options first, then fallback to initial data
+        def get_cfg(key, default=None):
+            return config_entry.options.get(key, config_entry.data.get(key, default))
+
+        # This replaces the old "hardware block" and PID tuning parameters
+        self.light_id = get_cfg("light_entity")
+        self.lux_id = get_cfg("lux_sensor")
+        self.occ_id = get_cfg("occupancy_sensor")
         
-        self.kp = float(config_entry.data.get("kp", 0.5))
-        self.ki = float(config_entry.data.get("ki", 0.01))
-        self.kd = float(config_entry.data.get("kd", 0.1))
-        self.update_interval = int(config_entry.data.get("update_interval", 5))
+        self.kp = float(get_cfg("kp", 0.5))
+        self.ki = float(get_cfg("ki", 0.01))
+        self.kd = float(get_cfg("kd", 0.1))
+        self.update_interval = int(get_cfg("update_interval", 5))
         
+        # State variables remain unchanged
         self._pid_task = None
         self._integral = 0.0
         self._last_error = 0.0

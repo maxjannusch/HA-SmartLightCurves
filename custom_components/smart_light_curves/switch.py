@@ -21,6 +21,8 @@ class LearningModeSwitch(SwitchEntity):
     def __init__(self, hass, config_entry):
         self.hass = hass
         self._config_entry = config_entry
+        
+        # We still get the name from .data since it isn't in the options flow
         self._attr_name = f"{config_entry.data.get('name', 'Room')} Calibration Mode"
         self._attr_unique_id = f"{config_entry.entry_id}_calibration_switch"
         self._attr_icon = "mdi:school-outline"
@@ -28,9 +30,14 @@ class LearningModeSwitch(SwitchEntity):
         self._is_on = False
         self._calibration_task = None
         
-        self._light_id = config_entry.data.get("light_entity")
-        self._lux_id = config_entry.data.get("lux_sensor")
-        self._occ_id = config_entry.data.get("occupancy_sensor")
+        # Helper function to check options first, then fallback to initial data
+        def get_cfg(key, default=None):
+            return config_entry.options.get(key, config_entry.data.get(key, default))
+        
+        # Fetch the hardware (this replaces the old block)
+        self._light_id = get_cfg("light_entity")
+        self._lux_id = get_cfg("lux_sensor")
+        self._occ_id = get_cfg("occupancy_sensor")
 
     @property
     def is_on(self):
