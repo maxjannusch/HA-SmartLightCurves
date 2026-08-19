@@ -10,10 +10,8 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
-            # When the user hits submit, save the data and create the integration instance
             return self.async_create_entry(title=user_input["name"], data=user_input)
 
-        # Define the filtered UI fields using Selectors
         data_schema = vol.Schema({
             vol.Required("name", default="Living Room"): selector.TextSelector(),
             
@@ -26,8 +24,10 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             
             vol.Required("occupancy_sensor"): selector.EntitySelector(
-                # Filters out numbers/strings, only shows ON/OFF binary sensors
-                selector.EntitySelectorConfig(domain="binary_sensor") 
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor",
+                    device_class=["motion", "occupancy", "presence"]
+                ) 
             ),
             
             vol.Optional("kp", default=0.5): selector.NumberSelector(
