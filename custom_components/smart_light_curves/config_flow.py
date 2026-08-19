@@ -11,7 +11,8 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return SmartLightCurvesOptionsFlow(config_entry)
+        # FIX: We no longer pass config_entry here. Home Assistant handles it automatically!
+        return SmartLightCurvesOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         errors = {}
@@ -51,16 +52,15 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class SmartLightCurvesOptionsFlow(config_entries.OptionsFlow):
     """Handle options changes after setup."""
 
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
+    # FIX: The __init__ function has been completely removed! 
 
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # Bulletproof helper: Casts legacy strings to numbers, and prevents 'None' crashes
         def get_cfg(key, default_val=vol.UNDEFINED, expected_type=None):
+            # We can still use self.config_entry here safely because HA injects it in the background
             val = self.config_entry.options.get(key, self.config_entry.data.get(key))
             
             if val is None:
