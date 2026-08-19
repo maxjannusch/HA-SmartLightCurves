@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Smart Light Curve",
+        "description": "Set up a new room for intelligent lighting control. The controller will learn the room's physical properties and dynamically adjust the lights to match your target curve.",
+        "data": {
+          "name": "Room Name",
+          "light_entity": "Target Light Entity",
+          "lux_sensor": "Illuminance (Lux) Sensor",
+          "occupancy_sensor": "Occupancy or Motion Sensor",
+          "kp": "Proportional Gain (Kp)",
+          "ki": "Integral Gain (Ki)",
+          "kd": "Derivative Gain (Kd)",
+          "update_interval": "Update Interval (seconds)"
+        },
+        "data_description": {
+          "name": "What should we call this room?",
+          "light_entity": "The specific light or light group to control.",
+          "lux_sensor": "The sensor measuring the current brightness in the room.",
+          "occupancy_sensor": "The sensor that triggers the lights to turn on and off.",
+          "kp": "How aggressively to correct for immediate light errors. (Default: 0.5)",
+          "ki": "How much to correct for long-term drift. (Default: 0.01)",
+          "kd": "How much to dampen the correction to prevent overshoot. (Default: 0.1)",
+          "update_interval": "How often the controller evaluates and adjusts the light level. (Default: 5s)"
+        }
+      }
+    }
+  }
+}

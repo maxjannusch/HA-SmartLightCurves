@@ -1,60 +1,49 @@
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers import selector
-import homeassistant.helpers.config_validation as cv
-
-# Must match your manifest and __init__.py
-DOMAIN = "smart_light_curves"
-
-# Define the form fields the user will see
-DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required("name", default="Smart Room Lighting"): str,
-        
-        # Dropdown for the Light
-        vol.Required("light_entity"): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="light")
-        ),
-        
-        # Dropdown for the Lux Sensor
-        vol.Required("lux_sensor"): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor")
-        ),
-        
-        # Dropdown for the Occupancy Sensor
-        vol.Required("occupancy_sensor"): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="binary_sensor")
-        ),
-        
-        # Advanced PID Tuning defaults (hidden as simple number inputs)
-        vol.Optional("kp", default=0.5): vol.Coerce(float),
-        vol.Optional("ki", default=0.01): vol.Coerce(float),
-        vol.Optional("kd", default=0.1): vol.Coerce(float),
-        vol.Optional("update_interval", default=5): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=60)
-        ),
-    }
-)
+from . import DOMAIN
 
 class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle the setup wizard for Smart Light Curves."""
+    """Handle a config flow for Smart Light Curves."""
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
-        """Handle the initial step when the user clicks 'Add Integration'."""
         errors = {}
-
         if user_input is not None:
-            # The user clicked "Submit". Let's create the integration entry!
-            # We use the 'name' they provided as the title of the integration card.
-            return self.async_create_entry(
-                title=user_input["name"], 
-                data=user_input
-            )
+            # When the user hits submit, save the data and create the integration instance
+            return self.async_create_entry(title=user_input["name"], data=user_input)
 
-        # If no input yet, show the form to the user
+        # Define the filtered UI fields using Selectors
+        data_schema = vol.Schema({
+            vol.Required("name", default="Living Room"): selector.TextSelector(),
+            
+            vol.Required("light_entity"): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="light")
+            ),
+            
+            vol.Required("lux_sensor"): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", device_class="illuminance")
+            ),
+            
+            vol.Required("occupancy_sensor"): selector.EntitySelector(
+                # Filters out numbers/strings, only shows ON/OFF binary sensors
+                selector.EntitySelectorConfig(domain="binary_sensor") 
+            ),
+            
+            vol.Optional("kp", default=0.5): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional("ki", default=0.01): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.0, max=10.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional("kd", default=0.1): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional("update_interval", default=5): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+        })
+
         return self.async_show_form(
-            step_id="user", 
-            data_schema=DATA_SCHEMA, 
-            errors=errors
+            step_id="user", data_schema=data_schema, errors=errors
         )
