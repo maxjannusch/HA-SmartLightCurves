@@ -3,8 +3,9 @@ import asyncio
 import datetime
 import os
 import json
+from collections import deque
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.core import Context  # <-- Added Context import
+from homeassistant.core import Context
 from . import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -14,11 +15,9 @@ class SmartLightController:
         self.hass = hass
         self.entry_id = config_entry.entry_id
         
-        # Helper function to check options first, then fallback to initial data
         def get_cfg(key, default=None):
             return config_entry.options.get(key, config_entry.data.get(key, default))
 
-        # This replaces the old "hardware block" and PID tuning parameters
         self.light_id = get_cfg("light_entity")
         self.lux_id = get_cfg("lux_sensor")
         self.occ_id = get_cfg("occupancy_sensor")
@@ -30,15 +29,21 @@ class SmartLightController:
         
         # State variables
         self._pid_task = None
+        self._fader_task = None
         self._integral = 0.0
         self._last_error = 0.0
-        self._current_brightness_pct = 0.0
-        self._occ_listener = None
         
-        # --- New Override Variables ---
+        # Decoupled brightness tracking
+        self._math_brightness_pct = 0.0      # Continuous float (0-100) manipulated by PID
+        self._target_brightness = 0          # Target integer (0-255)
+        self._current_brightness = 0         # Current physical integer (0-255)
+        
+        self._occ_listener = None
         self._light_listener = None
         self._manual_override = False
-        self._last_context_id = None
+        
+        # Use a deque for context IDs to prevent race conditions from 1-second polling
+        self._our_context_ids = deque(maxlen=20)
 
     async def start(self):
         """Start listening for occupancy and light changes."""
@@ -46,7 +51,6 @@ class SmartLightController:
             self.hass, [self.occ_id], self._occupancy_changed
         )
         
-        # Listen for manual light changes
         self._light_listener = async_track_state_change_event(
             self.hass, [self.light_id], self._light_changed
         )
@@ -81,11 +85,10 @@ class SmartLightController:
         if not new_state or not old_state:
             return
 
-        # If the context ID matches our last service call, it's our own change.
-        if event.context.id == self._last_context_id:
+        # Ignore our own automated service calls
+        if event.context.id in self._our_context_ids:
             return
 
-        # If the light is turned off, reset override so automation can take over on next occupancy
         if new_state.state == 'off':
             if self._manual_override:
                 _LOGGER.info("Light turned off manually. Resetting override.")
@@ -93,19 +96,17 @@ class SmartLightController:
             self._stop_pid_loop(turn_off_light=False)
             return
 
-        # Check for tangible changes (ignore attribute-only updates)
         state_changed = new_state.state != old_state.state
         old_brightness = old_state.attributes.get("brightness")
         new_brightness = new_state.attributes.get("brightness")
         
         brightness_changed = False
         if old_brightness is not None and new_brightness is not None:
-            if abs(old_brightness - new_brightness) > 5: # Give a 5-step tolerance for bulb rounding
+            if abs(old_brightness - new_brightness) > 5:
                 brightness_changed = True
         elif old_brightness != new_brightness:
             brightness_changed = True
 
-        # If someone manually triggered a state or brightness change
         if state_changed or brightness_changed:
             _LOGGER.info("Manual light change detected. Pausing PID controller.")
             self._manual_override = True
@@ -163,49 +164,59 @@ class SmartLightController:
                                 if pct < best_pct:
                                     best_pct = pct
                         start_pct = float(best_pct)
-                        _LOGGER.info(f"Feed-Forward: Target={target_lux}lx, Ambient={ambient_lux}lx. Snapping to {start_pct}%")
                     except Exception as e:
                         _LOGGER.error(f"Failed to read master_calibration: {e}")
                         start_pct = 50.0 
                 else:
                     start_pct = 50.0 
             
-            self._current_brightness_pct = start_pct
+            # Translate Feed-Forward pct to 0-255 scale
+            self._math_brightness_pct = start_pct
+            self._current_brightness = int((start_pct / 100.0) * 255)
+            self._target_brightness = self._current_brightness
             
-            if self._current_brightness_pct > 0:
-                # Add context to our service call
+            if self._current_brightness > 0:
                 context = Context()
-                self._last_context_id = context.id
+                self._our_context_ids.append(context.id)
                 self.hass.async_create_task(
                     self.hass.services.async_call(
                         'light', 'turn_on', 
-                        {'entity_id': self.light_id, 'brightness_pct': round(self._current_brightness_pct)},
+                        {
+                            'entity_id': self.light_id, 
+                            'brightness': self._current_brightness
+                        },
                         context=context
                     )
                 )
             
+            # Start Background Tasks
             self._pid_task = self.hass.async_create_task(self._pid_loop())
+            self._fader_task = self.hass.async_create_task(self._fader_loop())
 
     def _stop_pid_loop(self, turn_off_light=True):
+        """Halts automation calculations and physical fader execution."""
         if self._pid_task is not None:
             _LOGGER.info("Stopping controller.")
             self._pid_task.cancel()
             self._pid_task = None
             
-            # Conditionally turn off light (don't override manual settings)
-            if turn_off_light:
-                context = Context()
-                self._last_context_id = context.id
-                self.hass.async_create_task(
-                    self.hass.services.async_call(
-                        'light', 'turn_off', 
-                        {'entity_id': self.light_id},
-                        context=context
-                    )
+        if self._fader_task is not None:
+            self._fader_task.cancel()
+            self._fader_task = None
+            
+        if turn_off_light:
+            context = Context()
+            self._our_context_ids.append(context.id)
+            self.hass.async_create_task(
+                self.hass.services.async_call(
+                    'light', 'turn_off', 
+                    {'entity_id': self.light_id},
+                    context=context
                 )
+            )
 
     async def _pid_loop(self):
-        """The mathematical core of the controller."""
+        """Calculates internal math, unaware of physical bulb restrictions."""
         try:
             while True:
                 await asyncio.sleep(self.update_interval)
@@ -213,15 +224,9 @@ class SmartLightController:
                 target_lux = self._get_target_lux()
 
                 if target_lux <= 0:
-                    if self._current_brightness_pct > 0:
-                        self._current_brightness_pct = 0
-                        context = Context()
-                        self._last_context_id = context.id
-                        await self.hass.services.async_call(
-                            'light', 'turn_off', 
-                            {'entity_id': self.light_id},
-                            context=context
-                        )
+                    # Let the fader gracefully dim it down to 0
+                    self._math_brightness_pct = 0.0
+                    self._target_brightness = 0
                     continue
 
                 lux_state = self.hass.states.get(self.lux_id)
@@ -238,17 +243,46 @@ class SmartLightController:
                 adjustment = (self.kp * error) + (self.ki * self._integral) + (self.kd * derivative)
                 self._last_error = error
                 
-                # Apply the Adjustment (Deadband of 1.0)
-                if abs(adjustment) > 1.0:
-                    self._current_brightness_pct += adjustment
-                    self._current_brightness_pct = max(1.0, min(100.0, self._current_brightness_pct))
+                # Apply without deadband so the math integrates tiny errors seamlessly
+                self._math_brightness_pct += adjustment
+                self._math_brightness_pct = max(0.0, min(100.0, self._math_brightness_pct))
+                
+                # Update the target the fader is chasing (convert to 0-255 scale)
+                self._target_brightness = int((self._math_brightness_pct / 100.0) * 255)
+
+        except asyncio.CancelledError:
+            pass
+
+    async def _fader_loop(self):
+        """Physically shifts the bulb 1 step (out of 255) per second."""
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                
+                if self._current_brightness == self._target_brightness:
+                    continue
                     
-                    context = Context()
-                    self._last_context_id = context.id
+                # Move exactly 1 step per second
+                if self._current_brightness < self._target_brightness:
+                    self._current_brightness += 1
+                else:
+                    self._current_brightness -= 1
+                    
+                context = Context()
+                self._our_context_ids.append(context.id)
+                
+                if self._current_brightness <= 0:
+                    await self.hass.services.async_call(
+                        'light', 'turn_off', 
+                        {'entity_id': self.light_id},
+                        context=context
+                    )
+                else:
                     await self.hass.services.async_call(
                         'light', 'turn_on', {
                             'entity_id': self.light_id,
-                            'brightness_pct': round(self._current_brightness_pct)
+                            'brightness': self._current_brightness,
+                            'transition': 1  # Tell the bulb hardware to fade this 1 step smoothly
                         },
                         context=context
                     )
