@@ -27,6 +27,10 @@ class SmartLightController:
         self.kd = float(get_cfg("kd", 0.1))
         self.update_interval = int(get_cfg("update_interval", 5))
         
+        # --- NEW: Min and Max brightness constraints ---
+        self.min_brightness_pct = float(get_cfg("min_brightness", 10.0))
+        self.max_brightness_pct = float(get_cfg("max_brightness", 100.0))
+        
         # State variables
         self._pid_task = None
         self._fader_task = None
@@ -75,7 +79,12 @@ class SmartLightController:
         if new_state.state == 'on':
             self._start_pid_loop()
         elif new_state.state == 'off':
-            self._stop_pid_loop(turn_off_light=True)
+            # --- FIX A: Respect manual override when room becomes empty ---
+            if self._manual_override:
+                _LOGGER.info("Room empty, but manual override active. Leaving lights as-is.")
+                self._stop_pid_loop(turn_off_light=False)
+            else:
+                self._stop_pid_loop(turn_off_light=True)
 
     async def _light_changed(self, event):
         """Handle manual light changes to pause the automation."""
@@ -170,6 +179,9 @@ class SmartLightController:
                 else:
                     start_pct = 50.0 
             
+            # --- FIX B: Clamp the initial turn-on brightness to the user's bounds ---
+            start_pct = max(self.min_brightness_pct, min(self.max_brightness_pct, start_pct))
+            
             # Translate Feed-Forward pct to 0-255 scale
             self._math_brightness_pct = start_pct
             self._current_brightness = int((start_pct / 100.0) * 255)
@@ -243,9 +255,9 @@ class SmartLightController:
                 adjustment = (self.kp * error) + (self.ki * self._integral) + (self.kd * derivative)
                 self._last_error = error
                 
-                # Apply without deadband so the math integrates tiny errors seamlessly
+                # --- FIX B: Apply without deadband, but CLAMP to min/max constraints ---
                 self._math_brightness_pct += adjustment
-                self._math_brightness_pct = max(0.0, min(100.0, self._math_brightness_pct))
+                self._math_brightness_pct = max(self.min_brightness_pct, min(self.max_brightness_pct, self._math_brightness_pct))
                 
                 # Update the target the fader is chasing (convert to 0-255 scale)
                 self._target_brightness = int((self._math_brightness_pct / 100.0) * 255)
