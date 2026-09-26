@@ -33,6 +33,12 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     device_class=["motion", "occupancy", "presence"]
                 ) 
             ),
+            vol.Optional("min_brightness", default=10.0): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=100.0, step=1.0, mode=selector.NumberSelectorMode.SLIDER, unit_of_measurement="%")
+            ),
+            vol.Optional("max_brightness", default=100.0): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=100.0, step=1.0, mode=selector.NumberSelectorMode.SLIDER, unit_of_measurement="%")
+            ),
             vol.Optional("kp", default=0.5): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
             ),
@@ -48,6 +54,7 @@ class SmartLightCurvesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         })
 
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
+
 
 class SmartLightCurvesOptionsFlow(config_entries.OptionsFlow):
     """Handle options changes after setup."""
@@ -86,6 +93,12 @@ class SmartLightCurvesOptionsFlow(config_entries.OptionsFlow):
                     domain="binary_sensor", 
                     device_class=["motion", "occupancy", "presence"]
                 ) 
+            ),
+            vol.Optional("min_brightness", default=get_cfg("min_brightness", 10.0, float)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=100.0, step=1.0, mode=selector.NumberSelectorMode.SLIDER, unit_of_measurement="%")
+            ),
+            vol.Optional("max_brightness", default=get_cfg("max_brightness", 100.0, float)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=100.0, step=1.0, mode=selector.NumberSelectorMode.SLIDER, unit_of_measurement="%")
             ),
             vol.Optional("kp", default=get_cfg("kp", 0.5, float)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.0, max=10.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
